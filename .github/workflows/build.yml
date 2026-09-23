@@ -5,6 +5,15 @@ on:
     branches: [ main, master ]
   pull_request:
   workflow_dispatch:
+    inputs:
+      clean_build:
+        description: 'Force clean native build (ignore cache)'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
 
 jobs:
   build:
@@ -61,7 +70,15 @@ jobs:
           echo "Stripped. Verifying:"
           grep -r "org.gradle.java.home" . 2>/dev/null || echo "✅ No hardcoded Java home remains"
 
-      - name: Cache Gradle
+      - name: Clean native build artifacts
+        run: |
+          echo "Wiping any pre-existing .so / obj dirs so this is a TRUE source build"
+          rm -rf doom/src/main/libs/* 2>/dev/null || true
+          rm -rf doom/src/main/obj/* 2>/dev/null || true
+          ls -la doom/src/main/libs 2>/dev/null || echo "(libs dir gone or empty)"
+          ls -la doom/src/main/obj 2>/dev/null || echo "(obj dir gone or empty)"
+
+      - name: Cache Gradle (wrapper + caches only, NOT native)
         uses: actions/cache@v4
         with:
           path: |
@@ -70,25 +87,26 @@ jobs:
           key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
           restore-keys: gradle-${{ runner.os }}-
 
-      - name: Cache NDK build outputs
-        uses: actions/cache@v4
-        with:
-          path: |
-            doom/src/main/libs
-            doom/src/main/obj
-          key: ndk-${{ runner.os }}-${{ hashFiles('doom/src/main/jni/**') }}
-          restore-keys: ndk-${{ runner.os }}-
-
       - name: Make build scripts executable
         run: |
           chmod +x ./build_native.sh || true
           chmod +x ./gradlew || true
 
-      - name: Build native engine (.so) with NDK
+      - name: Build native engine (.so) with NDK — FROM SOURCE
         env:
           ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
         run: |
+          echo "=========================================="
+          echo "STARTING FRESH NATIVE BUILD FROM SOURCE"
+          echo "No cache. No shortcuts. Pure .cpp grind."
+          echo "=========================================="
           ./build_native.sh
+
+      - name: Verify .so exists
+        run: |
+          echo "=== Built native libs ==="
+          find doom/src/main/libs -name "*.so" -type f -exec ls -la {} \; || echo "⚠️ No .so found!"
+          find . -name "libzdoom.so" -o -name "libdoom.so" -o -name "*.so" -path "*/libs/*" 2>/dev/null | head -20
 
       - name: Build APK (debug)
         run: |
