@@ -16,7 +16,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          submodules: recursive
           fetch-depth: 0
 
       - name: Set up JDK 17
@@ -43,6 +42,24 @@ jobs:
           echo "NDK at: $ANDROID_NDK_HOME"
           ls -la "$ANDROID_NDK_HOME" | head -20
           "$ANDROID_NDK_HOME/ndk-build" --version || true
+
+      - name: Show hardcoded Java home (debug)
+        run: |
+          echo "=== gradle.properties ==="
+          cat gradle.properties 2>/dev/null || echo "(no root gradle.properties)"
+          echo "=== doom/gradle.properties ==="
+          cat doom/gradle.properties 2>/dev/null || echo "(no doom/gradle.properties)"
+          echo "=== local.properties ==="
+          cat local.properties 2>/dev/null || echo "(no local.properties)"
+          echo "=== JAVA_HOME ==="
+          echo "$JAVA_HOME"
+
+      - name: Strip hardcoded Java home from all properties files
+        run: |
+          find . -name "gradle.properties" -not -path "*/node_modules/*" -exec sed -i '/org.gradle.java.home/d' {} \; 2>/dev/null || true
+          find . -name "local.properties" -exec sed -i '/org.gradle.java.home/d' {} \; 2>/dev/null || true
+          echo "Stripped. Verifying:"
+          grep -r "org.gradle.java.home" . 2>/dev/null || echo "✅ No hardcoded Java home remains"
 
       - name: Cache Gradle
         uses: actions/cache@v4
@@ -75,12 +92,14 @@ jobs:
 
       - name: Build APK (debug)
         run: |
-          ./gradlew :doom:assembleDebug --stacktrace --no-daemon
+          ./gradlew :doom:assembleDebug --stacktrace --no-daemon \
+            -Dorg.gradle.java.home=$JAVA_HOME
 
       - name: Build APK (release, unsigned)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          ./gradlew :doom:assembleRelease --stacktrace --no-daemon
+          ./gradlew :doom:assembleRelease --stacktrace --no-daemon \
+            -Dorg.gradle.java.home=$JAVA_HOME
         continue-on-error: true
 
       - name: Locate APKs
