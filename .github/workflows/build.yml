@@ -1,0 +1,110 @@
+name: Build Doom APK (GZDoom Mods For Free Edition)
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build native + APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: 'latest'
+          packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
+
+      - name: Install NDK 27.0.12077973
+        run: |
+          yes | sdkmanager --install "ndk;27.0.12077973"
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.0.12077973" >> $GITHUB_ENV
+          echo "ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/27.0.12077973" >> $GITHUB_ENV
+          echo "$ANDROID_SDK_ROOT/ndk/27.0.12077973" >> $GITHUB_PATH
+
+      - name: Verify NDK
+        run: |
+          echo "NDK at: $ANDROID_NDK_HOME"
+          ls -la "$ANDROID_NDK_HOME" | head -20
+          "$ANDROID_NDK_HOME/ndk-build" --version || true
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      - name: Cache NDK build outputs
+        uses: actions/cache@v4
+        with:
+          path: |
+            doom/src/main/libs
+            doom/src/main/obj
+          key: ndk-${{ runner.os }}-${{ hashFiles('doom/src/main/jni/**') }}
+          restore-keys: ndk-${{ runner.os }}-
+
+      - name: Make build scripts executable
+        run: |
+          chmod +x ./build_native.sh || true
+          chmod +x ./gradlew || true
+
+      - name: Build native engine (.so) with NDK
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
+        run: |
+          ./build_native.sh
+
+      - name: Build APK (debug)
+        run: |
+          ./gradlew :doom:assembleDebug --stacktrace --no-daemon
+
+      - name: Build APK (release, unsigned)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          ./gradlew :doom:assembleRelease --stacktrace --no-daemon
+        continue-on-error: true
+
+      - name: Locate APKs
+        id: find_apks
+        run: |
+          echo "APKs found:"
+          find . -name "*.apk" -type f -print
+          mkdir -p artifacts
+          find . -name "*.apk" -type f -exec cp {} artifacts/ \;
+          ls -la artifacts/
+
+      - name: Upload APK artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: doom-apk-${{ github.sha }}
+          path: artifacts/*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload native libs (debugging)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-libs-${{ github.sha }}
+          path: doom/src/main/libs/**
+          if-no-files-found: ignore
+          retention-days: 7
